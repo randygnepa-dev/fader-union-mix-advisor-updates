@@ -1,0 +1,68 @@
+name: Publish verified macOS updater release
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'release_payload/v1.3.0.zip'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: macos-update-v1.3.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout release payload
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build release from previous signed application and approved delta
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v1.3.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release v1.3.0 already exists; not overwriting.'
+            exit 0
+          fi
+          test -f release_payload/v1.3.0.zip
+          printf '%s  %s\n' 'c4a57d83c411e24a6b52275cb0bf033940826117da5adef9315eb683a9bc9f81' 'release_payload/v1.3.0.zip' | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/build"
+          cd "$RUNNER_TEMP/build"
+          curl --fail --location --retry 3 --silent --show-error \
+             -o base.zip 'https://github.com/randygnepa-dev/fader-union-mix-advisor-updates/releases/download/v1.2.1/FADER_UNION_MIX_ADVISOR_MAC.zip'
+          printf '%s  %s\n' '5079e0e4a9aea1f1941a6b1fe8f253e44275d3d7defddab974053ca41f5ea613' 'base.zip' | shasum -a 256 -c -
+          /usr/bin/ditto -x -k base.zip .
+          /usr/bin/ditto -x -k "$GITHUB_WORKSPACE/release_payload/v1.3.0.zip" .
+          APP='FADER UNION MIX ADVISOR.app'
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.3.0' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 1.3.0' "$APP/Contents/Info.plist"
+          /usr/bin/python3 -m py_compile "$APP/Contents/Resources/server.py" "$APP/Contents/Resources/update_engine.py" "$APP/Contents/Resources/audio_analysis.py"
+          node --check "$APP/Contents/Resources/app.js"
+          test -x "$APP/Contents/MacOS/FaderUnionAdvisorNative"
+          /usr/bin/codesign --force --deep --sign - "$APP"
+          /usr/bin/codesign --verify --deep --strict "$APP"
+          /usr/bin/python3 - <<'PY'
+          import plistlib, pathlib, zipfile
+          app=pathlib.Path('FADER UNION MIX ADVISOR.app')
+          i=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+          assert i['CFBundleIdentifier']=='studio.faderunion.mixadvisor.pro'
+          assert i['CFBundleShortVersionString']=='1.3.0'
+          assert i['CFBundleExecutable']=='FaderUnionAdvisorNative'
+          out='FADER_UNION_MIX_ADVISOR_MAC.zip'
+          with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+              for p in sorted(app.rglob('*')):
+                  assert not p.is_symlink(),str(p)
+                  if p.is_file(): z.write(p,arcname=app.name+'/'+str(p.relative_to(app)))
+          with zipfile.ZipFile(out) as z:
+              assert app.name+'/Contents/Info.plist' in z.namelist()
+              assert app.name+'/Contents/MacOS/FaderUnionAdvisorNative' in z.namelist()
+          PY
+          printf '%s\n' 'V1.3.0: Compact UI, väčšie písmo, Ableton-first odporúčania a Live Bridge BETA. Lokálna história a Keychain zostávajú zachované.' > RELEASE_NOTES.md
+          gh release create v1.3.0 FADER_UNION_MIX_ADVISOR_MAC.zip \
+            --repo "$GITHUB_REPOSITORY" --title 'FADER UNION MIX ADVISOR PRO 1.3.0' \
+            --notes-file RELEASE_NOTES.md --latest
