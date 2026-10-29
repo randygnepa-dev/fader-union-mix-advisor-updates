@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'release_payload/v1.3.0.patch.xz'
+      - 'release_payload/READY_v1.3.0.txt'
   workflow_dispatch:
 permissions:
   contents: write
@@ -29,7 +29,8 @@ jobs:
             echo 'Release v1.3.0 already exists; not overwriting.'
             exit 0
           fi
-          test -f release_payload/v1.3.0.patch.xz
+          test -f release_payload/READY_v1.3.0.txt
+          cat release_payload/chunk*.b64 | base64 -D > release_payload/v1.3.0.patch.xz
           printf '%s  %s\n' '8a2078608f95eed2939ee5048f0c6cfed334e42b5fafe9c04ee7c6a37a69716f' 'release_payload/v1.3.0.patch.xz' | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/build"
           cd "$RUNNER_TEMP/build"
